@@ -4,7 +4,7 @@
 
 ### 1. Research questions and objectives
 
-This project investigates whether the recent trajectory of a surface drifter can be used to predict where it will travel next in the Gulf Stream region.
+This project investigates whether the recent trajectory of a surface drifter can be used to predict where it will travel next in the Gulf Stream region in period July to September.
 
 The primary research question is:
 
@@ -48,11 +48,7 @@ This is one NOAA dataset, not two separate datasets. In its CloudDrift/Xarray re
 - **Trajectory dimension (`traj`)**: one entry per drifter, including `id`, `rowsize`, deployment information, start and end dates, location system, and drogue-loss date.
 - **Observation dimension (`obs`)**: many hourly entries per drifter, including `time`, `lat`, `lon`, eastward velocity `ve`, northward velocity `vn`, sea-surface temperature `sst`, uncertainty estimates, quality flags, and `drogue_status`.
 
-For example, a drifter may have one trajectory-level entry with `id = 12345` and `rowsize = 8,000`, linked to 8,000 consecutive hourly observations in the `obs` dimension. This storage format is called a contiguous ragged array because different drifters have different numbers of observations. When the same data are requested as a flat table through NOAA ERDDAP, the drifter ID and relevant metadata are repeated across its hourly rows, so the result looks like an ordinary table.
-
-The raw satellite fixes were not necessarily recorded exactly once per hour. The hourly product estimates positions and velocities on a regular one-hour grid from irregular and noisy source observations. Consequently, uncertainty and quality variables will be retained during preprocessing rather than treating every interpolated observation as equally reliable.
-
-The core modelling variables are:
+Our core modelling variables are:
 
 | Variable | Meaning | Unit or type |
 | --- | --- | --- |
@@ -61,11 +57,7 @@ The core modelling variables are:
 | `lat`, `lon` | Position | degrees |
 | `ve`, `vn` | Eastward and northward velocity | m/s |
 | `sst` | Fitted sea-surface temperature | K |
-| `err_lat`, `err_lon` | Position uncertainty | degrees |
-| `err_ve`, `err_vn` | Velocity 95% confidence intervals | m/s |
 | `drogue_status` | Whether the drogue is present | boolean |
-
-The initial inspection script is [`inspect_gulf_stream.py`](inspect_gulf_stream.py). It queries a small subset from NOAA ERDDAP without downloading the full global archive.
 
 ### 3. Importance and significance
 
@@ -84,19 +76,20 @@ Several families of methods are relevant to this project:
 - **Statistical time-series models** use recent positions or velocities to extrapolate future motion.
 - **Machine-learning sequence models** learn nonlinear relationships in recent drifter motion. Aksamit et al. (2020), for example, combined recurrent learning with a reduced physical drifter model. More recent work by Grossi et al. (2025) found that simple neural networks did not consistently beat autoregressive baselines on observed Gulf of Mexico trajectories, while a spatiotemporal graph model showed more promise. This supports using strong baselines and held-out trajectories rather than assuming that a more complex model will automatically perform better.
 
-Our first modelling approach will use engineered recent-track features with gradient-boosted regression. This gives a practical and interpretable test of whether recent velocity, acceleration, turning, season, and location improve on the baselines. A GRU, LSTM, or temporal convolutional model will be considered as an extension if the feature-based model and data audit justify the additional complexity.
+Our modelling approach will use engineered recent-track features with gradient-boosted regression. This gives a practical and interpretable test of whether recent velocity, acceleration, turning, season, and location improve on the baselines. A GRU, LSTM, will be considered as an extension if the feature-based model and data audit justify the additional complexity.
 
 ### 5. Proposed method
 
 #### 5.1 Cohort construction and quality control
 
-1. Select observations whose forecast origin lies inside the Gulf Stream box.
-2. Sort each trajectory by `id` and `time`.
-3. Break trajectories at missing or unacceptably large time gaps.
-4. Require enough uninterrupted history and future observations for each forecast horizon.
-5. Remove invalid positions and velocities and examine the supplied uncertainty and quality flags.
-6. Retain drogue status so that drogued and undrogued forecasts can be evaluated separately. The primary analysis will prioritise drogued observations because undrogued drifters are more affected by direct wind slip.
-7. Preserve future locations even when a drifter leaves the study box, provided the global trajectory remains available. A spatial buffer will be used for the mean-flow baseline so forecasts near the region boundary can still be integrated.
+1. Define a common study window for each year, from 1 September at 00:00 UTC through 30 November at 23:00 UTC.
+2. Identify all drifter IDs with at least one valid observation inside the Gulf Stream box (`80°W–60°W`, `30°N–45°N`) during this window.
+3. For each selected drifter, retrieve all available observations within the same September–November window, regardless of location. Include observations before its first appearance in the box and after it leaves the box.
+4. Sort observations by `id` and `time`, remove duplicate drifter–time records, and align trajectories to the same hourly UTC time grid. Leave unavailable observations missing rather than assuming that every drifter has a complete record.
+5. Remove invalid positions and velocities, examine uncertainty and quality flags, and retain drogue status for separate evaluation of drogued and undrogued observations.
+6. Split trajectories at missing or unacceptably large time gaps and at boundaries between annual study windows. Do not split or truncate a trajectory simply because it crosses the geographic boundary.
+7. Construct forecast samples only when the required history and target observations are available within an uninterrupted segment of the same September–November window. Forecast origins and targets may lie outside the Gulf Stream box.
+8. Extend the spatial coverage of the mean-flow baseline to support trajectories outside the selection box, using training data only and a documented fallback where coverage is insufficient.
 
 #### 5.2 Prediction samples and targets
 
@@ -115,91 +108,41 @@ Candidate predictors include:
 - latest position, velocity, speed, and direction;
 - means, standard deviations, and trends of `ve` and `vn` over recent windows;
 - acceleration and recent turning angle;
-- cyclical hour-of-day and day-of-year features;
+- cyclical hour-of-day features and the position of the observation within the September–November study window;
 - sea-surface temperature and recent temperature change;
-- local and seasonal mean-flow velocity;
+- local September–November mean-flow velocity;
 - uncertainty measures and drogue status.
 
 Separate direct models will initially be trained for 1-, 24-, and 168-hour displacements. This avoids recursively feeding earlier prediction errors through 168 one-hour steps.
 
-#### 5.3 Baselines
+### 6. Preliminary Research
 
-**Baseline 1: constant present velocity.** The latest observed `ve` and `vn` are held constant and used to advect the current position for the full lead time:
+The analyses in [03_preliminary_analysis.ipynb](03_preliminary_analysis.ipynb) examine data completeness, forecast-horizon feasibility, and a simple prediction benchmark. The results below were checked against the four existing processed files, which contain **July–September observations from 2007–2022**. They are preliminary findings; the September–November cohort described in Section 5 still needs to be extracted and evaluated.
 
-\[
-\hat{p}_{t+h} = \operatorname{advance}(p_t, v_{e,t}, v_{n,t}, h).
-\]
+#### 6.1 Data completeness
 
-**Baseline 2: mean-flow advection.** A gridded velocity climatology will be estimated using training drifters only. Mean `ve` and `vn` will be calculated by spatial cell and season or month. Starting at the observed position, the prediction will be advanced in hourly steps, looking up the mean velocity at each new position. Sparse cells will use a documented fallback such as a coarser grid or smoothed neighbouring estimate.
+The existing extract contains **2,482,661 hourly observations**. No missing or non-finite values were found in longitude, latitude, or either velocity component, and there were no duplicate trajectory–time records. SST missingness varies by period:
 
-#### 5.4 Train, validation, and test design
+| Study period | Hourly observations | Unique trajectory IDs within period | Missing SST |
+| --- | ---: | ---: | ---: |
+| 2007–2010 | 616,023 | 251 | 3.05% |
+| 2011–2014 | 640,974 | 320 | 6.15% |
+| 2015–2018 | 587,026 | 231 | 3.30% |
+| 2019–2022 | 638,638 | 240 | 0.40% |
 
-The split will be performed by complete drifter ID, not by randomly splitting hourly rows:
+Position and velocity are therefore available for the initial models. SST can be tested as an additional predictor, with missing values handled using training data only. Completeness alone does not establish measurement accuracy.
 
-- 70% of drifters for training;
-- 15% for validation and model selection;
-- 15% held out for final testing.
+#### 6.2 Availability of future observations
 
-All overlapping windows from a given drifter will remain in the same partition. This prevents information from the same physical trajectory appearing in both training and testing. If coverage permits, a second evaluation will hold out a later time period to test temporal generalisation.
+![Percentage of origins with an exact future observation, by study period and forecast lead time](images/forecast_horizon_availability.png)
 
-All preprocessing parameters, including scaling, mean-flow fields, feature thresholds, and imputation values, will be fitted on the training partition only.
+Future observations were matched using the same trajectory ID and an exact timestamp offset, rather than a row shift. Across the four periods, availability is **99.92–99.94% at 1 hour**, **98.28–98.60% at 24 hours**, and **90.20–91.27% at 168 hours**. This supports investigating all three proposed horizons. These percentages measure endpoint availability; requiring uninterrupted input history and valid observations throughout each forecast segment will further restrict the usable samples.
 
-#### 5.5 Models and evaluation
+#### 6.3 A 24-hour constant-velocity benchmark
 
-The planned modelling sequence is:
+![Median, mean, and 90th-percentile 24-hour constant-velocity position errors for four study periods](images/constant_velocity_24h_error.png)
 
-1. Constant-velocity baseline.
-2. Seasonal mean-flow baseline.
-3. Regularised linear or autoregressive model.
-4. Gradient-boosted regression using recent-track features.
-5. Optional sequence model if it offers a justified extension.
-
-The primary evaluation measure will be great-circle distance between the predicted and observed position. For each horizon and model, we will report:
-
-- median position error in kilometres;
-- mean position error and RMSE;
-- 75th and 90th percentile error;
-- error distributions and error versus lead time;
-- skill relative to each baseline;
-- bootstrap confidence intervals resampled by drifter ID.
-
-A simple relative skill score will be calculated as:
-
-\[
-\operatorname{Skill} = 1 - \frac{\operatorname{Error}_{model}}
-                              {\operatorname{Error}_{baseline}}.
-\]
-
-Positive skill indicates improvement over the selected baseline. Performance will also be stratified by season, subregion, speed regime, trajectory uncertainty, and drogue status.
-
-### 6. Initial analysis and planned visualisations
-
-A preliminary read of the official NOAA endpoint used the proposed box and the period 1–3 January 2020. It returned 762 hourly observations from 11 unique drifters. Ten drifters contributed all 72 possible hourly observations, while one contributed 42 observations because it entered or left the selected box during the period. In this small diagnostic sample, the observed velocity components ranged approximately from `-2.26` to `0.96 m/s` eastward and from `-0.91` to `1.02 m/s` northward. This confirms the expected repeated-measures structure: many hourly rows belong to each drifter.
-
-This three-day subset is only a pipeline check and is not evidence that the full region has sufficient spatial or temporal coverage. The next analysis will audit the complete Gulf Stream subset using:
-
-1. a map of all drifter tracks, coloured by time or speed;
-2. spatial heatmaps of observation counts and unique drifter counts per grid cell;
-3. annual and monthly counts of observations and unique drifters;
-4. trajectory-duration and time-gap distributions;
-5. velocity, speed, sea-temperature, and uncertainty distributions;
-6. maps comparing drogued and undrogued coverage;
-7. example forecast cases showing the observed path and both baseline predictions.
-
-The coverage analysis will determine the final spatial grid, seasonal grouping, history length, and whether the initial geographic box should be refined.
-
-### 7. Timeline and work plan
-
-| Period | Planned work | Output |
-| --- | --- | --- |
-| Week 1 | Confirm research question, region, data access, and responsibilities | Research plan and reproducible sample query |
-| Weeks 2–3 | Download or stream the regional subset; perform quality checks and coverage analysis | Clean regional dataset and exploratory figures |
-| Weeks 3–4 | Construct uninterrupted track segments, forecast origins, targets, and ID-level splits | Modelling table and documented split |
-| Weeks 4–5 | Implement and validate both baselines | Baseline error curves at 1, 24, and 168 hours |
-| Weeks 5–7 | Develop linear and gradient-boosted models; tune using validation drifters | Selected main model and ablation results |
-| Weeks 7–8 | Evaluate on held-out drifters; analyse performance by season, location, and drogue status | Final metrics, confidence intervals, and error maps |
-| Weeks 8–9 | Optional sequence-model extension and sensitivity analysis | Extension results and model comparison |
-| Week 10 | Finalise report, code, figures, reproducibility checks, and presentation | Final submitted product |
+The baseline extrapolates the latest eastward and northward velocities for 24 hours and compares the predicted position with the exact future observation using great-circle distance. Median error ranges from **12.45 to 13.66 km**, while the 90th percentile reaches **29.70–33.34 km**. The larger upper-tail errors motivate reporting more than an average and testing whether recent trajectory history improves difficult forecasts. These results use all available 24-hour pairs and provide an exploratory benchmark, not a held-out model evaluation.
 
 ### Expected deliverables
 
