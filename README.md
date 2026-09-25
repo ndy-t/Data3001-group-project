@@ -117,7 +117,7 @@ Separate direct models will initially be trained for 1-, 24-, and 168-hour displ
 
 ### 6. Preliminary Research
 
-The analyses in [03_preliminary_analysis.ipynb](03_preliminary_analysis.ipynb) examine data completeness, forecast-horizon feasibility, and a simple prediction benchmark. The results below were checked against the four existing processed files, which contain **July–September observations from 2007–2022**. They are preliminary findings; the September–November cohort described in Section 5 still needs to be extracted and evaluated.
+The analyses in [03_preliminary_analysis.ipynb](notebook/03_preliminary_analysis.ipynb) examine data completeness, forecast-horizon feasibility, and a simple prediction benchmark. The results below were checked against the four existing processed files, which contain **July–September observations from 2007–2022**. They are preliminary findings; the September–November cohort described in Section 5 still needs to be extracted and evaluated.
 
 #### 6.1 Data completeness
 
@@ -134,13 +134,13 @@ Position and velocity are therefore available for the initial models. SST can be
 
 #### 6.2 Availability of future observations
 
-![Percentage of origins with an exact future observation, by study period and forecast lead time](images/forecast_horizon_availability.png)
+![Percentage of origins with an exact future observation, by study period and forecast lead time](image/forecast_horizon_availability.png)
 
 Future observations were matched using the same trajectory ID and an exact timestamp offset, rather than a row shift. Across the four periods, availability is **99.92–99.94% at 1 hour**, **98.28–98.60% at 24 hours**, and **90.20–91.27% at 168 hours**. This supports investigating all three proposed horizons. These percentages measure endpoint availability; requiring uninterrupted input history and valid observations throughout each forecast segment will further restrict the usable samples.
 
 #### 6.3 A 24-hour constant-velocity benchmark
 
-![Median, mean, and 90th-percentile 24-hour constant-velocity position errors for four study periods](images/constant_velocity_24h_error.png)
+![Median, mean, and 90th-percentile 24-hour constant-velocity position errors for four study periods](image/constant_velocity_24h_error.png)
 
 The baseline extrapolates the latest eastward and northward velocities for 24 hours and compares the predicted position with the exact future observation using great-circle distance. Median error ranges from **12.45 to 13.66 km**, while the 90th percentile reaches **29.70–33.34 km**. The larger upper-tail errors motivate reporting more than an average and testing whether recent trajectory history improves difficult forecasts. These results use all available 24-hour pairs and provide an exploratory benchmark, not a held-out model evaluation.
 
